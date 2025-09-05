@@ -28,3 +28,6 @@ Institute-only: visible and accessible only to that institute's students.
 */
 
   
+
+
+#1 Completed basic version of functions like handleAccess, handleMockTest, handleLiveTest. #2. Implemented the outline of the instituteOnlyMode
