@@ -8,12 +8,18 @@ async function handleAccess(req, res) {
                 message: "Test not found "
             })
         }
-        const test_type = test.type; // mock / live
-        if (test_type === "mock") {
+        const testType = test.type; // mock / live
+        if (testType === "mock") {
             return handleMockTest(req, res, test);
         }
-        else {
+        else if(testType == "live") {
             return handleLiveTest(req, res, test);
+        }
+        else{
+            return res.status(400).json({
+                success:false,
+                message:"Invalid test type"
+            })
         }
     }
     catch (err) {
@@ -34,9 +40,9 @@ async function handleMockTest(req, res, test) {
                 message: "User not found"
             })
         }
-        const user_attempts = await getUserAttempts(test.id, user.id); //** 
-        const max_attempts = getMaxAttempts(test) || 5; //** 
-        if (user_attempts >= max_attempts) {
+        const userAttempts = await getUserAttempts(test.id, user.id); //** 
+        const maxAttempts = getMaxAttempts(test) || 5; //** 
+        if (userAttempts >= maxAttempts) {
             return res.status(400).json({
                 success: false,
                 message: "You have reached the max number of attempts for this test"
@@ -62,39 +68,40 @@ async function handleLiveTest(req, res, test) {
         })
     }
 
-    const current_schedule = await findScheduleByTestId(test.id);//** 
-    const access_type = current_schedule.access;
-
-    if(!current_schedule){
+    const currentSchedule = await findScheduleByTestId(test.id);//**
+    
+    if (!currentSchedule) {
         return res.status(404).json({
-            success:false,
-            message:"No schedule found"
+            success: false,
+            message: "No schedule found"
         })
     }
+    const accessType = currentSchedule.access;
+
     // F*
-    const user_attempts = await getUserAttempts(test.id, user.id); //** 
-    const max_attempts = getMaxAttempts(test) ?? 5; //** 
-    if (user_attempts >= max_attempts) {
+    const userAttempts = await getUserAttempts(test.id, user.id); //** 
+    const maxAttempts = getMaxAttempts(test) ?? 5; //** 
+    if (userAttempts >= maxAttempts) {
         return res.status(400).json({
             success: false,
             message: "You have reached the max number of attempts for this test"
         })
     }
-    
+
 
     // 1.Apply-only 
-    if (access_type === "apply") {
-        return applyOnlyMode(req, res, user, test, current_schedule);
+    if (accessType === "apply") {
+        return applyOnlyMode(req, res, user, test, currentSchedule);
     }
 
     // 2.Open-unlimited
-    else if (access_type === "open") {
-        return openAccessMode(req, res, user, test, current_schedule);
+    else if (accessType === "open") {
+        return openAccessMode(req, res, user, test, currentSchedule);
     }
 
     // 3. Institute only
-    else if (access_type === "institute") {
-        return instituteOnlyMode(req, res, user, test, current_schedule);
+    else if (accessType === "institute") {
+        return instituteOnlyMode(req, res, user, test, currentSchedule);
     }
 
     return res.status(400).json({
@@ -104,79 +111,152 @@ async function handleLiveTest(req, res, test) {
 }
 
 // Access Modes Functions
+async function applyOnlyMode(req, res, user, test,currentSchedule) {
+    try {
+        const validMode = isValidAccessMode(currentSchedule.mode);
+        if(!validMode){
+            return res.status(400).json({
+                success:false,
+                message:"Invalid Access Mode"
+            })
+        }
 
-async function openAccessMode(req, res, user, test, current_schedule) {
-
-    //F*
-    const start_at = new Date(current_schedule.start_at);
-    const end_at = new Date(current_schedule.end_at);
-    const current_date_time = new Date();
-    
-    if (current_date_time >= start_at && current_date_time < end_at) {
-        return testEngineController.startTest(req, res, user, test);
-        // the startTest should send the start and end times to frontend
+        const testActive = isTestActive(currentSchedule);
+        if(testActive.status !== 200){
+            return res.status(testActive.status).json({
+                success:false,
+                message:testActive.message
+            });
+        }
+            
+        const applySuccessful = await applyOnlyController.apply(user, test);
+        if (!applySuccessful) {
+            return res.status(400).json({
+                success: false,
+                message: "Unable to apply to the test"
+            })
+        }
+        else {
+            return res.status(201).json({
+                success: true,
+                message: "Successfully applied to the test"
+            })
+        }
     }
-    else {
-        return res.status(403).json({
+    catch (err) {
+        console.log(err);
+        return res.status(500).json({
             success: false,
-            message: "The test is not active at the moment"
+            message: "Error occured while appying to the test"
         })
     }
 }
 
 
-async function instituteOnlyMode(req, res, user, test, current_schedule) {
-    const user_institute_id = user.institute_id;
-    const test_institute_id = test.institute_id;
-    const schedule_mode = current_schedule.mode;
 
-    if (user_institute_id !== test_institute_id) {
+async function openAccessMode(req, res, user, test, currentSchedule) {
+
+
+    const validMode = isValidAccessMode(currentSchedule.mode);
+    if(!validMode){
+        return res.status(400).json({
+            success:false,
+            message:"Invalid Access Mode"
+        })
+    }
+
+    const testActive = isTestActive(currentSchedule);
+    if(testActive.status === 200){
+        return testEngineController.startTest(req, res, user, test);
+    }
+    else{
+        return res.status(testActive.status).json({
+            success:false,
+            message:testActive.message
+        });
+    }
+}
+
+
+async function instituteOnlyMode(req, res, user, test, currentSchedule) {
+    const userInstitureId = user.institute_id;
+    const testInstitureId = test.institute_id;
+
+    if (userInstitureId !== testInstitureId) {
         return res.status(403).json({
             success: false,
             message: "You cannot apply to tests of this institute"
         })
     }
 
-    const start_at = new Date(current_schedule.start_at);
-    const end_at = new Date(current_schedule.end_at);
-    const current_date_time = new Date();
-    
-
-    // Mode A - Windowed Test
-    if (schedule_mode === "window") {
-
-        // Start if it is within the window
-        if (current_date_time >= start_at && current_date_time < end_at) {
-            return testEngineController.startTest(req, res, user, test);
-            // the startTest should send the start and end times to frontend
-        }
-        else {
-            return res.status(400).json({
-                success: false,
-                message: "The test is not active at the moment"
-            })
-        }
+    const validMode = isValidAccessMode(currentSchedule.mode);
+    if(!validMode){
+        return res.status(400).json({
+            success:false,
+            message:"Invalid Access Mode"
+        })
     }
-    // Mode B - Fixed Test
-    if (schedule_mode === "fixed") {
-        if (current_date_time < start_at) {
-            return res.status(400).json({
-                success: false,
-                message: "The test has not started yet"
-            })
-        }
-        else if(current_date_time >= end_at){
-            return res.status(400).json({
-                success: false,
-                message: "The test is already over"
-            })
-        }
-        else{
-            return testEngineController.startTest(req, res, user, test);
-        }
+
+    const testActive = isTestActive(currentSchedule);
+    if(testActive.status === 200){
+        return testEngineController.startTest(req, res, user, test);
+    }
+    else{
+        return res.status(testActive.status).json({
+            success:false,
+            message:testActive.message
+        });
     }
 }
 
+function isValidAccessMode(accessMode){
+    return ["fixed","window"].includes(accessMode);
+}
 
+async function isTestActive(currentSchedule) {
+
+    const startAt = new Date(currentSchedule.startAt);
+    const endAt = new Date(currentSchedule.endAt);
+    const currentDateTime = new Date();
+    const accessMode = currentSchedule.mode;
+
+    if (accessMode === "window") {
+        // Start if it is within the window
+        if (currentDateTime >= startAt && currentDateTime < endAt) {
+            return {
+                status:200
+            };
+        }
+        else {
+            return {
+                status:400,
+                message:"The test is not active at the moment"
+            }
+        }
+    }
+    else if(accessMode==="fixed"){
+        const lateEntryMinutes = 30;
+        const lastEntryTime = new Date(startAt);
+        lastEntryTime.setMinutes(startAt.getMinutes() + lateEntryMinutes);
+
+        if (currentDateTime < startAt) {
+            return {
+                status: 400,
+                message: "The test has not started yet"
+            }
+        }
+        else if (currentDateTime >= lastEntryTime) {
+            return{
+                status: 400,
+                message: "You are late to the test"
+            }
+        }
+        else {
+            return {status:200}
+        }
+
+    }
+
+}
 //** -> create/add the function after getting the controllers/functions from others
 //F* -> This code is duplicated, will make a function, so it can be reused
