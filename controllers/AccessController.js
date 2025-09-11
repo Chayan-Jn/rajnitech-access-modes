@@ -1,7 +1,45 @@
+const mysql = require('mysql2');
+
+// connection
+const connection = mysql.createConnection({
+    host: 'ip addr',
+    user: 'username',
+    password: '',
+    database: 'datbaseName'
+})
+
+connection.connect((err) => {
+
+    try {
+        if (err) {
+            console.log('Error connecting to the database ' + err.stack);
+            return;
+        }
+        console.log('Connected as id ' + connection.threadId);
+    }
+    catch (err) {
+        console.log("Error fetching test ", err);
+        throw new Error("Error while fetching the test form the DB ");
+    }
+
+})
+
+// Database Helper Functions
+
+async function findTestById(id) {
+    const [results] = await connection.execute('SELECT * FROM tests WHERE id = ?', [id]);
+    // if execute encounters and err it will throw it 
+
+    if (results.length == 0) {
+        throw new Error('Test not found');
+    }
+    return results[0];
+    // returns the first result from arr of objects
+}
 
 async function handleAccess(req, res) {
     try {
-        const test = await findTestById(req.params.id);  //** assuming this function gets the test from the mysql database
+        const test = await findTestById(req.params.id);  //**  this function gets the test from the mysql database
         if (!test) {
             return res.status(404).json({
                 success: false,
@@ -12,13 +50,13 @@ async function handleAccess(req, res) {
         if (testType === "mock") {
             return handleMockTest(req, res, test);
         }
-        else if(testType == "live") {
+        else if (testType == "live") {
             return handleLiveTest(req, res, test);
         }
-        else{
+        else {
             return res.status(400).json({
-                success:false,
-                message:"Invalid test type"
+                success: false,
+                message: "Invalid test type"
             })
         }
     }
@@ -41,7 +79,7 @@ async function handleMockTest(req, res, test) {
             })
         }
         const userAttempts = await getUserAttempts(test.id, user.id); //** 
-        const maxAttempts = getMaxAttempts(test) || 5; //** 
+        const maxAttempts = getMaxAttempts(test) ?? 5; //** 
         if (userAttempts >= maxAttempts) {
             return res.status(400).json({
                 success: false,
@@ -69,7 +107,7 @@ async function handleLiveTest(req, res, test) {
     }
 
     const currentSchedule = await findScheduleByTestId(test.id);//**
-    
+
     if (!currentSchedule) {
         return res.status(404).json({
             success: false,
@@ -111,24 +149,24 @@ async function handleLiveTest(req, res, test) {
 }
 
 // Access Modes Functions
-async function applyOnlyMode(req, res, user, test,currentSchedule) {
+async function applyOnlyMode(req, res, user, test, currentSchedule) {
     try {
         const validMode = isValidAccessMode(currentSchedule.mode);
-        if(!validMode){
+        if (!validMode) {
             return res.status(400).json({
-                success:false,
-                message:"Invalid Access Mode"
+                success: false,
+                message: "Invalid Access Mode"
             })
         }
-
-        const testActive = isTestActive(currentSchedule);
-        if(testActive.status !== 200){
+        const userCurrentTime = req.body.timeStamp;
+        const testActive = isTestActive(currentSchedule, userCurrentTime);
+        if (testActive.status !== 200) {
             return res.status(testActive.status).json({
-                success:false,
-                message:testActive.message
+                success: false,
+                message: testActive.message
             });
         }
-            
+
         const applySuccessful = await applyOnlyController.apply(user, test);
         if (!applySuccessful) {
             return res.status(400).json({
@@ -158,21 +196,22 @@ async function openAccessMode(req, res, user, test, currentSchedule) {
 
 
     const validMode = isValidAccessMode(currentSchedule.mode);
-    if(!validMode){
+    if (!validMode) {
         return res.status(400).json({
-            success:false,
-            message:"Invalid Access Mode"
+            success: false,
+            message: "Invalid Access Mode"
         })
     }
 
-    const testActive = isTestActive(currentSchedule);
-    if(testActive.status === 200){
+    const userCurrentTime = req.body.timeStamp;
+    const testActive = isTestActive(currentSchedule, userCurrentTime);
+    if (testActive.status === 200) {
         return testEngineController.startTest(req, res, user, test);
     }
-    else{
+    else {
         return res.status(testActive.status).json({
-            success:false,
-            message:testActive.message
+            success: false,
+            message: testActive.message
         });
     }
 }
@@ -190,51 +229,52 @@ async function instituteOnlyMode(req, res, user, test, currentSchedule) {
     }
 
     const validMode = isValidAccessMode(currentSchedule.mode);
-    if(!validMode){
+    if (!validMode) {
         return res.status(400).json({
-            success:false,
-            message:"Invalid Access Mode"
+            success: false,
+            message: "Invalid Access Mode"
         })
     }
 
-    const testActive = isTestActive(currentSchedule);
-    if(testActive.status === 200){
+    const userCurrentTime = req.body.timeStamp;
+    const testActive = isTestActive(currentSchedule, userCurrentTime);
+    if (testActive.status === 200) {
         return testEngineController.startTest(req, res, user, test);
     }
-    else{
+    else {
         return res.status(testActive.status).json({
-            success:false,
-            message:testActive.message
+            success: false,
+            message: testActive.message
         });
     }
 }
 
-function isValidAccessMode(accessMode){
-    return ["fixed","window"].includes(accessMode);
+function isValidAccessMode(accessMode) {
+    return ["fixed", "window"].includes(accessMode);
 }
 
-async function isTestActive(currentSchedule) {
+async function isTestActive(currentSchedule, userCurrentTime) {
 
     const startAt = new Date(currentSchedule.startAt);
     const endAt = new Date(currentSchedule.endAt);
-    const currentDateTime = new Date();
+    const currentDateTime = new Date(userCurrentTime);
     const accessMode = currentSchedule.mode;
 
     if (accessMode === "window") {
         // Start if it is within the window
         if (currentDateTime >= startAt && currentDateTime < endAt) {
             return {
-                status:200
+                status: 200
             };
         }
         else {
             return {
-                status:400,
-                message:"The test is not active at the moment"
+                status: 400,
+                message: "The test is not active at the moment"
             }
         }
     }
-    else if(accessMode==="fixed"){
+    else if (accessMode === "fixed") {
         const lateEntryMinutes = 30;
         const lastEntryTime = new Date(startAt);
         lastEntryTime.setMinutes(startAt.getMinutes() + lateEntryMinutes);
@@ -246,17 +286,32 @@ async function isTestActive(currentSchedule) {
             }
         }
         else if (currentDateTime >= lastEntryTime) {
-            return{
+            return {
                 status: 400,
                 message: "You are late to the test"
             }
         }
         else {
-            return {status:200}
+            return { status: 200 }
         }
 
     }
 
 }
 //** -> create/add the function after getting the controllers/functions from others
+// *** -> very important
 //F* -> This code is duplicated, will make a function, so it can be reused
+
+
+// *** time zone handling
+
+/* If the test window is b/w 9 AM and 12 PM, 9-12 is the user's local time, not the server’s
+
+So , the users from other countries should get access to the test based on their respective 9AM-12PM, not a fixed global 
+time 
+We can get user's time from the frontend
+const userLocalTime = new Date();
+const utcString = userLocalTime.toISOString();
+We will get that as req.body.timeStamp
+
+*/
