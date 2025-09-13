@@ -1,33 +1,56 @@
+/* Remaining 
+applyOnlyController.apply(user, test)
+testEngineController.startTest(req, res, user, test)
+*/
+
+
+
 const mysql = require('mysql2');
 
 // connection
-const connection = mysql.createConnection({
+// pool provides reusable connections, good for performance
+// createPool create a pool,
+// createConnection creates 1 connection
+// mysql pool automatically manages the connections unlike
+// a single connection
+const pool = mysql.createPool({
     host: 'ip addr',
     user: 'username',
-    password: '',
-    database: 'datbaseName'
+    password: 'password',
+    database: 'datbaseName',
+    waitForConnections:true,
+    connectionLimit:10,
+    queueLimit:0 // unlimited queue,
+    //port:3306 // (optional)
 })
 
-connection.connect((err) => {
+// to get async/await interface
+const connectionPool = pool.promise()
 
-    try {
-        if (err) {
-            console.log('Error connecting to the database ' + err.stack);
-            return;
-        }
-        console.log('Connected as id ' + connection.threadId);
-    }
-    catch (err) {
-        console.log("Error fetching test ", err);
-        throw new Error("Error while fetching the test form the DB ");
-    }
 
-})
+async function connectToDb(){
+    try{
+        const [results] = await connectionPool.execute('SELECT 200');
+        // simple query to check db connection, db returns [{ '200': 200 }]
+
+        console.log("Db connection is successful ");
+    }
+    catch(err){
+        console.log('Error while connecting to the database ',err);
+        throw new Error('Error connecting to the database ');
+    }
+}
+connectToDb()
+
 
 // Database Helper Functions
 
 async function findTestById(id) {
-    const [results] = await connection.execute('SELECT * FROM tests WHERE id = ?', [id]);
+
+    // connection.exectue provides promise based interface, connection.query doesn't
+
+    // Prepared statement to avoid sql injections
+    const [results] = await connectionPool.execute('SELECT * FROM tests WHERE id = ?', [id]);
     // if execute encounters and err it will throw it 
 
     if (results.length == 0) {
@@ -37,6 +60,40 @@ async function findTestById(id) {
     // returns the first result from arr of objects
 }
 
+async function getUserAttempts(userId,testId) {
+    try{
+        const [results] = await connectionPool.execute('SELECT * FROM attempts WHERE user_id = ? AND schedule_id = ?',[userId,testId]);
+        return results.length;
+    }
+    catch(err){
+        console.log("Error while getting user attempts ",err)
+        throw new Error('Could not get user attempts')
+    }
+}
+
+//*Complete this later* 
+async function getMaxAttempts(testId) {
+    
+}
+
+async function findScheduleByTestId(testId) {
+    try{
+        const [results] = await connectionPool.execute('SELECT * FROM schedules WHERE test_id = ?',[testId]);
+
+        if(results.length === 0){
+            throw new Error('Could not get the schedule')
+        }
+        return results[0];
+
+    }
+    catch(err){
+        console.log(`Error finding schedule for test id: ${testId}`,err)
+        throw new Error('Could not get the schedule')
+    }
+}
+
+
+// Access Functions
 async function handleAccess(req, res) {
     try {
         const test = await findTestById(req.params.id);  //**  this function gets the test from the mysql database
@@ -98,54 +155,64 @@ async function handleMockTest(req, res, test) {
 }
 
 async function handleLiveTest(req, res, test) {
-    const user = req.user;
-    if (!user) {
-        return res.status(404).json({
-            success: false,
-            message: "User not found"
-        })
-    }
 
-    const currentSchedule = await findScheduleByTestId(test.id);//**
+    try{
+        const user = req.user;
+        if (!user) {
+            return res.status(404).json({
+                success: false,
+                message: "User not found"
+            })
+        }
 
-    if (!currentSchedule) {
-        return res.status(404).json({
-            success: false,
-            message: "No schedule found"
-        })
-    }
-    const accessType = currentSchedule.access;
+        const currentSchedule = await findScheduleByTestId(test.id);//**
 
-    // F*
-    const userAttempts = await getUserAttempts(test.id, user.id); //** 
-    const maxAttempts = getMaxAttempts(test) ?? 5; //** 
-    if (userAttempts >= maxAttempts) {
+        if (!currentSchedule) {
+            return res.status(404).json({
+                success: false,
+                message: "No schedule found"
+            })
+        }
+        const accessType = currentSchedule.access;
+
+        // F*
+        const userAttempts = await getUserAttempts(test.id, user.id); //** 
+        const maxAttempts = getMaxAttempts(test) ?? 5; //** 
+        if (userAttempts >= maxAttempts) {
+            return res.status(400).json({
+                success: false,
+                message: "You have reached the max number of attempts for this test"
+            })
+        }
+
+
+        // 1.Apply-only 
+        if (accessType === "apply") {
+            return applyOnlyMode(req, res, user, test, currentSchedule);
+        }
+
+        // 2.Open-unlimited
+        else if (accessType === "open") {
+            return openAccessMode(req, res, user, test, currentSchedule);
+        }
+
+        // 3. Institute only
+        else if (accessType === "institute") {
+            return instituteOnlyMode(req, res, user, test, currentSchedule);
+        }
+
         return res.status(400).json({
             success: false,
-            message: "You have reached the max number of attempts for this test"
-        })
+            message: "Invalid test schedule mode"
+        });
     }
-
-
-    // 1.Apply-only 
-    if (accessType === "apply") {
-        return applyOnlyMode(req, res, user, test, currentSchedule);
+    catch(err){
+        console.error("Error in handleLiveTest:", err);
+        return res.status(500).json({
+            success: false,
+            message: "An error occured while attempting the test."
+        });
     }
-
-    // 2.Open-unlimited
-    else if (accessType === "open") {
-        return openAccessMode(req, res, user, test, currentSchedule);
-    }
-
-    // 3. Institute only
-    else if (accessType === "institute") {
-        return instituteOnlyMode(req, res, user, test, currentSchedule);
-    }
-
-    return res.status(400).json({
-        success: false,
-        message: "Invalid test schedule mode"
-    });
 }
 
 // Access Modes Functions
